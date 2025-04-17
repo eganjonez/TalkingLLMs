@@ -1,7 +1,7 @@
 import streamlit as st
 import os
 from dotenv import load_dotenv
-from main import VoiceAssistant, LLM_PROVIDER, WHISPER_MODEL_SIZE, COMPUTE_TYPE, DEVICE, NUM_WORKERS
+from main import VoiceAssistant, LLM_PROVIDER, WHISPER_MODEL_SIZE, COMPUTE_TYPE, DEVICE, NUM_WORKERS, get_ollama_models, get_lm_studio_models
 import threading
 import time
 import queue
@@ -41,25 +41,78 @@ with st.sidebar:
     # LLM Provider Selection
     provider = st.selectbox(
         "Select LLM Provider",
-        ["ollama", "lm_studio", "openai", "claude", "claude_desktop"],
-        index=["ollama", "lm_studio", "openai", "claude", "claude_desktop"].index(LLM_PROVIDER)
+        ["ollama", "lm_studio", "openai", "claude", "claude_desktop", "google"],
+        index=["ollama", "lm_studio", "openai", "claude", "claude_desktop", "google"].index(LLM_PROVIDER)
     )
+    
+    # API Key fields for remote providers
+    if provider in ["openai", "claude", "google"]:
+        api_key = st.text_input(
+            f"{provider.upper()} API Key",
+            type="password",
+            value=os.getenv(f"{provider.upper()}_API_KEY", "")
+        )
+        os.environ[f"{provider.upper()}_API_KEY"] = api_key
     
     # Model-specific settings
     if provider == "ollama":
-        model_name = st.text_input("Ollama Model Name", value="llama3.1:8b")
+        ollama_models = get_ollama_models()
+        model_name = st.selectbox(
+            "Ollama Model",
+            ollama_models,
+            index=0 if ollama_models else None,
+            help="Select a model from your local Ollama installation"
+        )
     elif provider == "lm_studio":
-        api_url = st.text_input("LM Studio API URL", value="http://localhost:1234/v1")
+        lm_studio_models = get_lm_studio_models()
+        if lm_studio_models:
+            model = st.selectbox(
+                "LM Studio Model",
+                lm_studio_models,
+                index=0,
+                help="Select a model from your local LM Studio installation"
+            )
+        else:
+            st.warning("No models found in LM Studio. Please make sure LM Studio is running and has models loaded.")
+            model = st.text_input(
+                "LM Studio Model Name",
+                value="",
+                help="Enter the name of your local model (e.g., 'mistral-7b-instruct-v0.2.Q4_K_M.gguf')"
+            )
     elif provider == "openai":
         model = st.selectbox(
             "OpenAI Model",
-            ["gpt-4-turbo-preview", "gpt-4", "gpt-3.5-turbo"],
+            [
+                "gpt-4o-mini",
+                "gpt-4-turbo-preview",
+                "gpt-4",
+                "gpt-4-32k",
+                "gpt-3.5-turbo",
+                "gpt-3.5-turbo-16k"
+            ],
             index=0
         )
     elif provider == "claude":
         model = st.selectbox(
             "Claude Model",
-            ["claude-3-opus-20240229", "claude-3-sonnet-20240229", "claude-3-haiku-20240307"],
+            [
+                "claude-3-opus-20240229",
+                "claude-3-sonnet-20240229",
+                "claude-3-haiku-20240307",
+                "claude-2.1",
+                "claude-2.0"
+            ],
+            index=0
+        )
+    elif provider == "google":
+        model = st.selectbox(
+            "Google Model",
+            [
+                "gemini-1.5-pro",
+                "gemini-1.5-flash",
+                "gemini-1.0-pro",
+                "gemini-1.0-ultra"
+            ],
             index=0
         )
     
@@ -106,6 +159,14 @@ with st.sidebar:
         value=10
     )
 
+    # Add system message configuration
+    st.subheader("Assistant Behavior")
+    system_message = st.text_area(
+        "System Message",
+        value="You are a helpful, friendly voice assistant. Keep your responses concise and conversational since they will be spoken aloud.",
+        help="This message helps guide the assistant's behavior and response style."
+    )
+
 # Main content area
 st.header("Voice Assistant")
 
@@ -123,15 +184,17 @@ with col1:
                     'device': device,
                     'num_workers': num_workers,
                     'vad_mode': vad_mode,
-                    'silence_threshold': silence_threshold
+                    'silence_threshold': silence_threshold,
+                    'system_message': system_message
                 }
                 
                 if provider == "ollama":
                     config['model_name'] = model_name
                 elif provider == "lm_studio":
-                    config['api_url'] = api_url
-                elif provider in ["openai", "claude"]:
                     config['model'] = model
+                elif provider in ["openai", "claude", "google"]:
+                    config['model'] = model
+                    config['api_key'] = os.getenv(f"{provider.upper()}_API_KEY")
                 
                 # Create and store the assistant
                 assistant = VoiceAssistant(config=config)

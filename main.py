@@ -163,10 +163,10 @@ class EnhancedSpeechRecognizer:
 
 # ============= LLM Module =============
 class BaseLLM:
-    def __init__(self):
+    def __init__(self, system_message=None):
         self.history = [
             {"role": "system",
-             "content": "You are a helpful, friendly voice assistant. Keep your responses concise and conversational since they will be spoken aloud."}
+             "content": system_message or "You are a helpful, friendly voice assistant. Keep your responses concise and conversational since they will be spoken aloud."}
         ]
 
     def get_response(self, user_input):
@@ -179,8 +179,8 @@ class BaseLLM:
         ]
 
 class ClaudeLLM(BaseLLM):
-    def __init__(self, api_key=CLAUDE_API_KEY, model=CLAUDE_MODEL):
-        super().__init__()
+    def __init__(self, api_key=CLAUDE_API_KEY, model=CLAUDE_MODEL, system_message=None):
+        super().__init__(system_message)
         if not api_key:
             raise ValueError("Claude API key is required")
         self.api_key = api_key
@@ -246,10 +246,11 @@ class ClaudeLLM(BaseLLM):
             return error_msg
 
 class LMStudioLLM(BaseLLM):
-    def __init__(self, api_url=LM_STUDIO_URL):
-        super().__init__()
-        self.api_url = api_url
-        print(f"Using LM Studio at: {api_url}")
+    def __init__(self, model=None, system_message=None):
+        super().__init__(system_message)
+        self.api_url = "http://localhost:1234/v1"
+        self.model = model
+        print(f"Using LM Studio with model: {model}")
 
     def get_response(self, user_input):
         """Get response from LM Studio"""
@@ -300,8 +301,8 @@ class LMStudioLLM(BaseLLM):
             return error_msg
 
 class OllamaLLM(BaseLLM):
-    def __init__(self, model_name=MODEL_NAME):
-        super().__init__()
+    def __init__(self, model_name=MODEL_NAME, system_message=None):
+        super().__init__(system_message)
         print(f"Using Ollama with model: {model_name}")
         self.model_name = model_name
         self.api_url = f"{OLLAMA_API_URL}/api/generate"
@@ -357,8 +358,8 @@ class OllamaLLM(BaseLLM):
             return error_msg
 
 class OpenAILLM(BaseLLM):
-    def __init__(self, api_key=OPENAI_API_KEY, model=OPENAI_MODEL):
-        super().__init__()
+    def __init__(self, api_key=OPENAI_API_KEY, model=OPENAI_MODEL, system_message=None):
+        super().__init__(system_message)
         if not api_key:
             raise ValueError("OpenAI API key is required")
         self.api_key = api_key
@@ -416,8 +417,8 @@ class OpenAILLM(BaseLLM):
             return error_msg
 
 class ClaudeDesktopLLM(BaseLLM):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, system_message=None):
+        super().__init__(system_message)
         print("Using Claude Desktop (local Claude on Mac)")
         # Add implementation for Claude Desktop
 
@@ -425,6 +426,60 @@ class ClaudeDesktopLLM(BaseLLM):
         """Get response from Claude Desktop"""
         # Add implementation for Claude Desktop
         pass
+
+class GoogleLLM(BaseLLM):
+    def __init__(self, api_key=None, model="gemini-1.5-pro", system_message=None):
+        super().__init__(system_message)
+        if not api_key:
+            raise ValueError("Google API key is required")
+        self.api_key = api_key
+        self.model = model
+        print(f"Using Google with model: {model}")
+
+    def get_response(self, user_input):
+        """Get response from Google's Gemini"""
+        if not user_input.strip():
+            return "I didn't catch that. Could you please repeat?"
+
+        try:
+            import google.generativeai as genai
+            genai.configure(api_key=self.api_key)
+            
+            # Format messages for Gemini
+            messages = []
+            for msg in self.history:
+                if msg["role"] == "system":
+                    messages.append({"role": "user", "parts": [msg["content"]]})
+                else:
+                    role = "user" if msg["role"] == "user" else "model"
+                    messages.append({"role": role, "parts": [msg["content"]]})
+            
+            # Add current user message
+            messages.append({"role": "user", "parts": [user_input]})
+
+            # Create the model
+            model = genai.GenerativeModel(self.model)
+            
+            # Start a chat
+            chat = model.start_chat(history=messages[:-1])
+            
+            # Get response
+            response = chat.send_message(user_input)
+            assistant_message = response.text
+            
+            # Print and add to history
+            print(f"Assistant: {assistant_message}")
+            
+            # Add messages to history
+            self.history.append({"role": "user", "content": user_input})
+            self.history.append({"role": "assistant", "content": assistant_message})
+            
+            return assistant_message
+
+        except Exception as e:
+            error_msg = f"Error communicating with Google: {str(e)}"
+            print(error_msg)
+            return error_msg
 
 
 # ============= Text-to-Speech Module =============
@@ -553,14 +608,18 @@ class VoiceAssistant:
             if LLM_PROVIDER == "ollama":
                 MODEL_NAME = config.get('model_name', MODEL_NAME)
             elif LLM_PROVIDER == "lm_studio":
-                LM_STUDIO_URL = config.get('api_url', LM_STUDIO_URL)
-            elif LLM_PROVIDER in ["openai", "claude"]:
+                LM_STUDIO_URL = "http://localhost:1234/v1"  # Default URL
+                MODEL_NAME = config.get('model', MODEL_NAME)
+            elif LLM_PROVIDER in ["openai", "claude", "google"]:
                 if LLM_PROVIDER == "openai":
                     global OPENAI_MODEL
                     OPENAI_MODEL = config.get('model', OPENAI_MODEL)
-                else:
+                elif LLM_PROVIDER == "claude":
                     global CLAUDE_MODEL
                     CLAUDE_MODEL = config.get('model', CLAUDE_MODEL)
+                elif LLM_PROVIDER == "google":
+                    global GOOGLE_MODEL
+                    GOOGLE_MODEL = config.get('model', "gemini-1.5-pro")
 
         # Check for GPU
         if torch.cuda.is_available():
@@ -573,15 +632,17 @@ class VoiceAssistant:
         # Initialize LLM based on provider
         print(f"Initializing LLM provider: {LLM_PROVIDER}")
         if LLM_PROVIDER == "claude":
-            self.local_llm = ClaudeLLM()
+            self.local_llm = ClaudeLLM(api_key=config.get('api_key') if config else None, system_message=config.get('system_message') if config else None)
         elif LLM_PROVIDER == "openai":
-            self.local_llm = OpenAILLM()
+            self.local_llm = OpenAILLM(api_key=config.get('api_key') if config else None, system_message=config.get('system_message') if config else None)
         elif LLM_PROVIDER == "lm_studio":
-            self.local_llm = LMStudioLLM()
+            self.local_llm = LMStudioLLM(model=config.get('model') if config else None, system_message=config.get('system_message') if config else None)
         elif LLM_PROVIDER == "claude_desktop":
-            self.local_llm = ClaudeDesktopLLM()
+            self.local_llm = ClaudeDesktopLLM(system_message=config.get('system_message') if config else None)
+        elif LLM_PROVIDER == "google":
+            self.local_llm = GoogleLLM(api_key=config.get('api_key') if config else None, system_message=config.get('system_message') if config else None)
         else:  # Default to Ollama
-            self.local_llm = OllamaLLM()
+            self.local_llm = OllamaLLM(system_message=config.get('system_message') if config else None)
             
         self.text_to_speech = StreamingTextToSpeech()
 
@@ -673,6 +734,51 @@ class VoiceAssistant:
                 print(f"Full error: {traceback.format_exc()}")
                 self.text_to_speech.speak("I encountered an error. Let's try again.")
                 raise  # Re-raise the exception to be caught by the Streamlit thread
+
+    def get_ollama_models(self):
+        """Fetch available models from Ollama"""
+        try:
+            response = requests.get("http://localhost:11434/api/tags")
+            if response.status_code == 200:
+                models = response.json().get("models", [])
+                return [model["name"] for model in models]
+        except Exception as e:
+            print(f"Error fetching Ollama models: {e}")
+        return ["llama3.1:8b"]  # Default fallback
+
+    def get_lm_studio_models(self):
+        """Fetch available models from LM Studio"""
+        try:
+            response = requests.get("http://localhost:1234/v1/models")
+            if response.status_code == 200:
+                models = response.json().get("data", [])
+                return [model["id"] for model in models]
+        except Exception as e:
+            print(f"Error fetching LM Studio models: {e}")
+        return []  # Return empty list if no models found
+
+
+def get_ollama_models():
+    """Fetch available models from Ollama"""
+    try:
+        response = requests.get("http://localhost:11434/api/tags")
+        if response.status_code == 200:
+            models = response.json().get("models", [])
+            return [model["name"] for model in models]
+    except Exception as e:
+        print(f"Error fetching Ollama models: {e}")
+    return ["llama3.1:8b"]  # Default fallback
+
+def get_lm_studio_models():
+    """Fetch available models from LM Studio"""
+    try:
+        response = requests.get("http://localhost:1234/v1/models")
+        if response.status_code == 200:
+            models = response.json().get("data", [])
+            return [model["id"] for model in models]
+    except Exception as e:
+        print(f"Error fetching LM Studio models: {e}")
+    return []  # Return empty list if no models found
 
 
 if __name__ == "__main__":
